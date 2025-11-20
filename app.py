@@ -378,7 +378,7 @@ def login_page():
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        st.image("placeholder_logo.png", use_column_width=True) # Placeholder para o logo
+        st.image("logoesd.png", use_column_width=True)
         st.markdown(f"<h3 style='text-align: center; color: #004d99;'>{APP_TITLE}</h3>", unsafe_allow_html=True)
         
         username = st.text_input("Usuário")
@@ -1253,3 +1253,4 @@ elif st.session_state['logged_in']:
     main_app()
 else:
     login_page() # Fallback
+
