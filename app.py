@@ -353,14 +353,23 @@ def gerar_historico_pdf(dados_aluno, dados_historico):
 # ==============================================================================
 def check_login(username, password):
     hashed_password = make_hashes(password)
+    # st.sidebar.info(f"Hash da Senha: {hashed_password}") # Linha de diagnóstico temporária. Descomente para debug.
+    
+    import sys
+    print(f"DEBUG: Tentando login para {username} com hash {hashed_password}", file=sys.stderr)
+    
     q = "SELECT * FROM usuarios WHERE username = ? AND password = ?"
     df = get_data(q, (username, hashed_password))
+    import sys
+    print(f"DEBUG: Resultado da Query: {df.to_dict() if not df.empty else 'Vazio'}", file=sys.stderr)
+    
     if not df.empty:
         return df.iloc[0]
     return None
 
 def create_user(username, password, setor, email):
     hashed_password = make_hashes(password)
+    # st.sidebar.info(f"Hash da Senha: {hashed_password}") # Linha de diagnóstico temporária. Descomente para debug.
     q = "INSERT INTO usuarios (username, password, setor, email) VALUES (?, ?, ?, ?)"
     return run_query(q, (username, hashed_password, setor, email))
 
@@ -378,8 +387,8 @@ def login_page():
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        # st.image("logo.png", width=100) # Descomente e ajuste o nome/tamanho do logo
-        st.markdown(f"<h3 style='text-align: center; color: #004d99; margin-top: 10px;'>{APP_TITLE}</h3>", unsafe_allow_html=True)
+        st.image("logoesd.png", width=80) # Logo ajustado
+        st.markdown(f"<h3 style='text-align: center; color: #004d99;'>{APP_TITLE}</h3>", unsafe_allow_html=True)
         
         username = st.text_input("Usuário")
         password = st.text_input("Senha", type="password")
@@ -479,8 +488,8 @@ def main_app():
     
     # --- SIDEBAR (Menu) ---
     with st.sidebar:
-        # st.image("logo.png", width=100) # Descomente e ajuste o nome/tamanho do logo
-        st.markdown(f"<h3 style='text-align: center; color: white; margin-top: 10px;'>{APP_TITLE}</h3>", unsafe_allow_html=True)
+        st.image("logoesd.png", width=80) # Logo ajustado
+        st.markdown(f"<h3 style='text-align: center; color: white;'>{APP_TITLE}</h3>", unsafe_allow_html=True)
         st.markdown(f"**Usuário:** {user_data['username']}")
         st.markdown(f"**Setor:** {user_data['setor']}")
         st.markdown("---")
