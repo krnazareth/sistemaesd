@@ -183,7 +183,7 @@ def verificar_e_atualizar_tabelas():
         f'''CREATE TABLE IF NOT EXISTS historico_escolar (id {pk_type}, aluno_id INTEGER, ano_letivo INTEGER, turma_nome TEXT, dias_letivos INTEGER, frequencia_aluno INTEGER, nota_portugues REAL, nota_matematica REAL, nota_historia REAL, nota_geografia REAL, nota_ciencias REAL, nota_ingles REAL, nota_artes REAL, nota_ed_fisica REAL, nota_religiao REAL, resultado_final TEXT, obs TEXT, FOREIGN KEY(aluno_id) REFERENCES alunos(id))''',
         f'''CREATE TABLE IF NOT EXISTS financeiro (id {pk_type}, aluno_id INTEGER, descricao TEXT, valor REAL, vencimento TEXT, status TEXT DEFAULT 'Pendente', FOREIGN KEY(aluno_id) REFERENCES alunos(id))''',
         f'''CREATE TABLE IF NOT EXISTS modelos_relatorios (id {pk_type}, titulo TEXT, conteudo_tex TEXT)''',
-        f'''CREATE TABLE IF NOT EXISTS usuarios (id {pk_type}, username TEXT UNIQUE, password TEXT, setor TEXT, email TEXT)''',
+        f'''CREATE TABLE IF NOT EXISTS usuarios (id {pk_type}, username TEXT UNIQUE, "password" TEXT, setor TEXT, email TEXT)''',
         f'''CREATE TABLE IF NOT EXISTS codigos_recuperacao (email TEXT PRIMARY KEY, codigo TEXT, criado_em TEXT)''',
         f'''CREATE TABLE IF NOT EXISTS templates_email (id {pk_type}, nome_interno TEXT UNIQUE, assunto TEXT, corpo TEXT)''',
         f'''CREATE TABLE IF NOT EXISTS templates_whatsapp (id {pk_type}, nome_interno TEXT UNIQUE, mensagem TEXT)''',
@@ -356,7 +356,7 @@ def check_login(username, password):
     st.sidebar.info(f"Hash Enviado: {hashed_password}") # Linha de diagnóstico para o usuário
     # st.sidebar.info(f"Hash da Senha: {hashed_password}") # Linha de diagnóstico temporária. Descomente para debug.
     
-    q = 'SELECT * FROM usuarios WHERE lower(username) = lower(?) AND password = ?'
+    q = 'SELECT * FROM usuarios WHERE username = ? AND password = ?'
     df = get_data(q, (username, hashed_password))
     if not df.empty:
         return df.iloc[0]
