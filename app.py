@@ -358,24 +358,12 @@ def check_login(username, password):
     
     q = 'SELECT * FROM usuarios WHERE username = %s AND password = %s'
     
-    conn = get_connection()
-    if not conn: return None
+    # Revertendo para a forma original que usa get_data
+    df = get_data(q, (username, hashed_password))
     
-    try:
-        c = conn.cursor()
-        c.execute(q, (username, hashed_password))
-        user_record = c.fetchone()
-        
-        if user_record:
-            # Converte o resultado da tupla para um dicionário/série do pandas
-            col_names = [desc[0] for desc in c.description]
-            return pd.Series(dict(zip(col_names, user_record)))
-        return None
-    except Exception as e:
-        st.error(f"ERRO CRÍTICO DE LOGIN: {e}")
-        return None
-    finally:
-        conn.close()
+    if not df.empty:
+        return df.iloc[0]
+    return None
 
 def create_user(username, password, setor, email):
     hashed_password = make_hashes(password)
