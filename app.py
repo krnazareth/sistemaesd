@@ -9,6 +9,7 @@ import smtplib
 import random
 import string
 import urllib.parse
+import socket # <--- ADICIONE ESSA IMPORTAÇÃO AQUI
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import date, datetime, timedelta
@@ -41,8 +42,12 @@ def get_connection():
     if IS_POSTGRES:
         import psycopg2
         try:
+            # CORREÇÃO CRÍTICA: Força a resolução do DNS para IPv4
+            # Isso resolve o erro "Cannot assign requested address" no Streamlit Cloud
+            ip_banco = socket.gethostbyname(DB_CONFIG["host"])
+            
             return psycopg2.connect(
-                host=DB_CONFIG["host"],
+                host=ip_banco, # Usa o IP resolvido
                 database=DB_CONFIG["dbname"],
                 user=DB_CONFIG["user"],
                 password=DB_CONFIG["password"],
