@@ -378,8 +378,8 @@ def login_page():
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        st.image("logoesd.png", use_column_width=True)
-        st.markdown(f"<h3 style='text-align: center; color: #004d99;'>{APP_TITLE}</h3>", unsafe_allow_html=True)
+        # st.image("logo.png", width=100) # Descomente e ajuste o nome/tamanho do logo
+        st.markdown(f"<h3 style='text-align: center; color: #004d99; margin-top: 10px;'>{APP_TITLE}</h3>", unsafe_allow_html=True)
         
         username = st.text_input("Usuário")
         password = st.text_input("Senha", type="password")
@@ -479,8 +479,8 @@ def main_app():
     
     # --- SIDEBAR (Menu) ---
     with st.sidebar:
-        st.image("placeholder_logo.png", use_column_width=True) # Placeholder para o logo
-        st.markdown(f"<h3 style='text-align: center; color: white;'>{APP_TITLE}</h3>", unsafe_allow_html=True)
+        # st.image("logo.png", width=100) # Descomente e ajuste o nome/tamanho do logo
+        st.markdown(f"<h3 style='text-align: center; color: white; margin-top: 10px;'>{APP_TITLE}</h3>", unsafe_allow_html=True)
         st.markdown(f"**Usuário:** {user_data['username']}")
         st.markdown(f"**Setor:** {user_data['setor']}")
         st.markdown("---")
@@ -1253,4 +1253,3 @@ elif st.session_state['logged_in']:
     main_app()
 else:
     login_page() # Fallback
-
