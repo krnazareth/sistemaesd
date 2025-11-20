@@ -96,22 +96,36 @@ st.markdown("""
 DB_CONFIG = st.secrets.get("database")
 IS_POSTGRES = DB_CONFIG is not None
 
-def get_connection():
-    """Retorna conexão SQLite ou PostgreSQL dependendo da configuração."""
-    if IS_POSTGRES:
+# Substitua a função run_query antiga por esta lógica usando st.connection
+# Isso exige que você tenha configurado o .streamlit/secrets.toml corretamente
+
+def run_query(query, params=()):
+    # Se for SQLite, mantém como estava
+    if not IS_POSTGRES:
+        conn = sqlite3.connect('escola.db', timeout=10)
+        c = conn.cursor()
         try:
-            return psycopg2.connect(
-                host=DB_CONFIG["host"],
-                database=DB_CONFIG["dbname"],
-                user=DB_CONFIG["user"],
-                password=DB_CONFIG["password"],
-                port=DB_CONFIG["port"]
-            )
+            c.execute(query, params)
+            conn.commit()
+            return True
         except Exception as e:
-            st.error(f"ERRO CRÍTICO DE CONEXÃO COM O BANCO DE DADOS (Supabase): {e}")
-            return None
+            st.error(f"Erro: {e}")
+            return False
+        finally:
+            conn.close()
+    
+    # Se for Postgres, usa a conexão inteligente do Streamlit
     else:
-        return sqlite3.connect('escola.db', timeout=10)
+        try:
+            # st.connection gerencia o cache e não fecha a conexão a toda hora
+            conn = st.connection("postgresql", type="sql")
+            with conn.session as s:
+                s.execute(text(query), params) # Precisa importar 'text' do sqlalchemy
+                s.commit()
+            return True
+        except Exception as e:
+            st.error(f"Erro PG: {e}")
+            return False
 
 def fix_query(query):
     """Adapta a query do padrão SQLite (?) para PostgreSQL (%s) se necessário."""
@@ -120,7 +134,7 @@ def fix_query(query):
     return query
 
 def run_query(query, params=()):
-    conn = get_connection()
+    conn = run_query()
     if not conn: return False
     
     c = conn.cursor()
@@ -142,7 +156,7 @@ def run_query(query, params=()):
         conn.close()
 
 def get_data(query, params=()):
-    conn = get_connection()
+    conn = run_query()
     if not conn: return pd.DataFrame()
     
     final_query = fix_query(query)
@@ -169,7 +183,7 @@ def get_config_sistema(chave):
 @st.cache_resource
 def verificar_e_atualizar_tabelas():
     """Esta função agora roda apenas UMA vez ao iniciar o servidor, tornando o sistema muito mais rápido."""
-    conn = get_connection()
+    conn = run_query()
     if not conn: return
     c = conn.cursor()
     
