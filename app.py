@@ -353,9 +353,10 @@ def gerar_historico_pdf(dados_aluno, dados_historico):
 # ==============================================================================
 def check_login(username, password):
     hashed_password = make_hashes(password)
+    st.sidebar.info(f"Hash Enviado: {hashed_password}") # Linha de diagnóstico para o usuário
     # st.sidebar.info(f"Hash da Senha: {hashed_password}") # Linha de diagnóstico temporária. Descomente para debug.
     
-    q = 'SELECT * FROM usuarios WHERE username = ? AND password = ?'
+    q = 'SELECT * FROM usuarios WHERE lower(username) = lower(?) AND password = ?'
     df = get_data(q, (username, hashed_password))
     if not df.empty:
         return df.iloc[0]
@@ -363,6 +364,7 @@ def check_login(username, password):
 
 def create_user(username, password, setor, email):
     hashed_password = make_hashes(password)
+    st.sidebar.info(f"Hash Enviado: {hashed_password}") # Linha de diagnóstico para o usuário
     # st.sidebar.info(f"Hash da Senha: {hashed_password}") # Linha de diagnóstico temporária. Descomente para debug.
     q = "INSERT INTO usuarios (username, password, setor, email) VALUES (?, ?, ?, ?)"
     return run_query(q, (username, hashed_password, setor, email))
