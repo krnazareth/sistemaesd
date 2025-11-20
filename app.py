@@ -356,11 +356,26 @@ def check_login(username, password):
     st.sidebar.info(f"Hash Enviado: {hashed_password}") # Linha de diagnóstico para o usuário
     # st.sidebar.info(f"Hash da Senha: {hashed_password}") # Linha de diagnóstico temporária. Descomente para debug.
     
-    q = 'SELECT * FROM usuarios WHERE username = ? AND password = ?'
-    df = get_data(q, (username, hashed_password))
-    if not df.empty:
-        return df.iloc[0]
-    return None
+    q = 'SELECT * FROM usuarios WHERE username = %s AND password = %s'
+    
+    conn = get_connection()
+    if not conn: return None
+    
+    try:
+        c = conn.cursor()
+        c.execute(q, (username, hashed_password))
+        user_record = c.fetchone()
+        
+        if user_record:
+            # Converte o resultado da tupla para um dicionário/série do pandas
+            col_names = [desc[0] for desc in c.description]
+            return pd.Series(dict(zip(col_names, user_record)))
+        return None
+    except Exception as e:
+        st.error(f"ERRO CRÍTICO DE LOGIN: {e}")
+        return None
+    finally:
+        conn.close()
 
 def create_user(username, password, setor, email):
     hashed_password = make_hashes(password)
