@@ -355,14 +355,8 @@ def check_login(username, password):
     hashed_password = make_hashes(password)
     # st.sidebar.info(f"Hash da Senha: {hashed_password}") # Linha de diagnóstico temporária. Descomente para debug.
     
-    import sys
-    print(f"DEBUG: Tentando login para {username} com hash {hashed_password}", file=sys.stderr)
-    
     q = "SELECT * FROM usuarios WHERE username = ? AND password = ?"
     df = get_data(q, (username, hashed_password))
-    import sys
-    print(f"DEBUG: Resultado da Query: {df.to_dict() if not df.empty else 'Vazio'}", file=sys.stderr)
-    
     if not df.empty:
         return df.iloc[0]
     return None
