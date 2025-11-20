@@ -9,13 +9,12 @@ import smtplib
 import random
 import string
 import urllib.parse
-# (Removemos o import socket pois não é mais necessário com o Pooler)
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import date, datetime, timedelta
 from fpdf import FPDF
 
-# --- CONFIGURAÇÃO GERAL ---
+# --- CONFIGURAÇÃO GERAL (Deve ser a primeira linha de comando Streamlit) ---
 st.set_page_config(page_title="Sistema Integrado Sonho Dourado", layout="wide", page_icon="🏫")
 
 # --- CSS PERSONALIZADO ---
@@ -23,7 +22,6 @@ st.markdown("""
     <style>
     .stButton>button {width: 100%;}
     .metric-card {background-color: #f0f2f6; border-radius: 10px; padding: 15px; text-align: center;}
-    /* Estilo para o link de esqueci a senha */
     .forgot-pass {text-align: center; font-size: 0.8em; color: #555; cursor: pointer;}
     .status-ok {color: green; font-weight: bold;}
     .status-warn {color: orange; font-weight: bold;}
@@ -33,7 +31,6 @@ st.markdown("""
 # ==============================================================================
 # CAMADA DE DADOS (HÍBRIDA: SQLITE + POSTGRESQL)
 # ==============================================================================
-# Verifica se existe configuração de banco na nuvem (Secrets do Streamlit)
 DB_CONFIG = st.secrets.get("database")
 IS_POSTGRES = DB_CONFIG is not None
 
@@ -42,7 +39,6 @@ def get_connection():
     if IS_POSTGRES:
         import psycopg2
         try:
-            # Conexão Limpa e Padrão para usar com o Pooler (Porta 6543)
             return psycopg2.connect(
                 host=DB_CONFIG["host"],
                 database=DB_CONFIG["dbname"],
@@ -54,7 +50,6 @@ def get_connection():
             st.error(f"Erro ao conectar no PostgreSQL: {e}")
             return None
     else:
-        # Modo Local (SQLite) - Cria o arquivo se não existir
         return sqlite3.connect('escola.db', timeout=10)
 
 def fix_query(query):
@@ -68,11 +63,9 @@ def run_query(query, params=()):
     if not conn: return False
     
     c = conn.cursor()
-    # Adaptação de sintaxe para o banco correto
     final_query = fix_query(query)
     
     try:
-        # SQLite precisa ativar foreign keys manualmente
         if not IS_POSTGRES:
              c.execute("PRAGMA foreign_keys = ON;")
         
@@ -92,7 +85,6 @@ def get_data(query, params=()):
     final_query = fix_query(query)
     
     try:
-        # pandas read_sql usa a conexão nativa e entende os tipos
         df = pd.read_sql_query(final_query, conn, params=params)
         return df
     except Exception as e:
@@ -101,17 +93,25 @@ def get_data(query, params=()):
     finally:
         conn.close()
 
-# --- MIGRAÇÃO E INICIALIZAÇÃO DE TABELAS ---
+# --- CACHE PARA CONFIGURAÇÕES (OTIMIZAÇÃO) ---
+@st.cache_data(ttl=300) # Cache por 5 minutos
+def get_config_sistema(chave):
+    """Busca configurações com cache para evitar hits excessivos no banco."""
+    df = get_data("SELECT valor FROM config_sistema WHERE chave=?", (chave,))
+    if not df.empty:
+        return df.iloc[0]['valor']
+    return ""
+
+# --- MIGRAÇÃO E INICIALIZAÇÃO DE TABELAS (OTIMIZAÇÃO CRÍTICA) ---
+@st.cache_resource
 def verificar_e_atualizar_tabelas():
+    """Esta função agora roda apenas UMA vez ao iniciar o servidor, tornando o sistema muito mais rápido."""
     conn = get_connection()
     if not conn: return
     c = conn.cursor()
     
-    # Definição de Tipos para compatibilidade
-    # SQLite usa AUTOINCREMENT, Postgres usa SERIAL
     pk_type = "SERIAL PRIMARY KEY" if IS_POSTGRES else "INTEGER PRIMARY KEY AUTOINCREMENT"
     
-    # Lista de Comandos de Criação
     tabelas = [
         f'''CREATE TABLE IF NOT EXISTS professores (id {pk_type}, nome TEXT, telefone TEXT, cargo TEXT DEFAULT 'Professor', cpf TEXT, rg TEXT, data_admissao TEXT, salario_base REAL, carga_horaria TEXT, endereco TEXT, status_rh TEXT DEFAULT 'Ativo')''',
         f'''CREATE TABLE IF NOT EXISTS turmas (id {pk_type}, nome_turma TEXT UNIQUE, professor_id INTEGER, ativa INTEGER DEFAULT 1, FOREIGN KEY(professor_id) REFERENCES professores(id))''',
@@ -131,24 +131,19 @@ def verificar_e_atualizar_tabelas():
         try:
             c.execute(create_cmd)
         except Exception as e:
-            pass # Ignora erro se tabela já existe
+            pass
 
-    # Admin Padrão (Lógica Híbrida)
     try:
-        # Verifica se existe usuário Admin
         q_check_admin = "SELECT * FROM usuarios"
         c.execute(q_check_admin)
         if not c.fetchall():
             from hashlib import sha256
-            # Sintaxe compatível para Insert
             q_insert = fix_query("INSERT INTO usuarios (username, password, setor, email) VALUES (?, ?, ?, ?)")
             c.execute(q_insert, ("admin", sha256(str.encode("1234")).hexdigest(), "Administrador", "admin@escola.com"))
             conn.commit()
     except Exception as e:
-        # Se for a primeira vez rodando, commitamos a criação das tabelas
         conn.commit()
 
-    # Templates Padrão (Helper para inserir dados iniciais)
     def insert_ignore(table, col_check, val_check, cols_insert, vals_insert):
         q_check = fix_query(f"SELECT id FROM {table} WHERE {col_check} = ?")
         c.execute(q_check, (val_check,))
@@ -158,19 +153,16 @@ def verificar_e_atualizar_tabelas():
             c.execute(q_ins, vals_insert)
             conn.commit()
 
-    # 1. Cobrança Normal
     insert_ignore("templates_email", "nome_interno", "Nova Cobrança", "nome_interno, assunto, corpo", 
                   ("Nova Cobrança", "Aviso Financeiro - Escola Sonho Dourado", "Olá {responsavel},\n\nInformamos que uma nova cobrança foi gerada para o aluno(a) {aluno}.\n\nDescrição: {descricao}\nValor: R$ {valor}\nVencimento: {vencimento}\n\nAtenciosamente,\nSecretaria."))
     insert_ignore("templates_whatsapp", "nome_interno", "Nova Cobrança Zap", "nome_interno, mensagem",
                   ("Nova Cobrança Zap", "Olá {responsavel}! 👋\nNova cobrança gerada para *{aluno}*.\n\n📝 *Ref:* {descricao}\n💰 *Valor:* R$ {valor}\n📅 *Vencimento:* {vencimento}"))
 
-    # 2. Aviso 5 Dias
     insert_ignore("templates_email", "nome_interno", "Aviso 5 Dias", "nome_interno, assunto, corpo",
                   ("Aviso 5 Dias", "Lembrete de Vencimento Próximo", "Olá {responsavel},\n\nLembramos que a fatura de {aluno} vencerá em 5 dias ({vencimento}).\n\nDescrição: {descricao}\nValor: R$ {valor}\n\nEvite juros pagando em dia."))
     insert_ignore("templates_whatsapp", "nome_interno", "Aviso 5 Dias Zap", "nome_interno, mensagem",
                   ("Aviso 5 Dias Zap", "Olá {responsavel}! 👋\nPassando para lembrar que a mensalidade de *{aluno}* vence em 5 dias ({vencimento}).\n\nValor: R$ {valor}\nDescrição: {descricao}"))
 
-    # 3. Aviso Hoje
     insert_ignore("templates_email", "nome_interno", "Aviso Hoje", "nome_interno, assunto, corpo",
                   ("Aviso Hoje", "Fatura Vence Hoje!", "Olá {responsavel},\n\nA fatura referente a {descricao} vence HOJE ({vencimento}).\nAluno: {aluno}\nValor: R$ {valor}\n\nCaso já tenha pago, desconsidere."))
     insert_ignore("templates_whatsapp", "nome_interno", "Aviso Hoje Zap", "nome_interno, mensagem",
@@ -178,6 +170,7 @@ def verificar_e_atualizar_tabelas():
 
     conn.close()
 
+# Executa a inicialização (com cache)
 verificar_e_atualizar_tabelas()
 
 # --- SEGURANÇA E UTILITÁRIOS ---
@@ -187,7 +180,6 @@ def gerar_codigo_recuperacao():
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
 def processar_template_email(texto_template, dados_dict):
-    """Substitui as variáveis {chave} pelos valores do dicionário."""
     texto_processado = texto_template
     for chave, valor in dados_dict.items():
         valor_str = str(valor) if valor is not None else ""
@@ -195,28 +187,14 @@ def processar_template_email(texto_template, dados_dict):
     return texto_processado
 
 def limpar_telefone(telefone):
-    """Remove caracteres não numéricos do telefone para o link do WhatsApp."""
     if not telefone: return ""
     nums = ''.join(filter(str.isdigit, str(telefone)))
     return nums
 
 def enviar_email_real(destinatario, assunto, corpo):
-    cfg = get_data("SELECT * FROM config_sistema")
-    email_escola = ""
-    senha_app = ""
+    email_escola = get_config_sistema('email_envio')
+    senha_app = get_config_sistema('senha_app')
     
-    if not cfg.empty:
-        try:
-            # Tenta buscar as chaves específicas
-            df_mail = cfg[cfg['chave']=='email_envio']
-            df_pass = cfg[cfg['chave']=='senha_app']
-            
-            if not df_mail.empty:
-                email_escola = df_mail.iloc[0]['valor']
-            if not df_pass.empty:
-                senha_app = df_pass.iloc[0]['valor']
-        except: pass
-
     if not email_escola or not senha_app:
         return False, "Configure o e-mail no menu Configurações."
     
@@ -314,7 +292,7 @@ if 'recovery_email' not in st.session_state: st.session_state['recovery_email'] 
 if IS_POSTGRES:
     st.sidebar.success("☁️ Modo Nuvem Ativo (Seguro)")
 else:
-    st.sidebar.warning("💾 Modo Local (Temporário)")
+    st.sidebar.warning("💾 Modo Local (SQLite)")
 
 if not st.session_state['logged_in']:
     
@@ -329,11 +307,9 @@ if not st.session_state['logged_in']:
             if st.session_state['recovery_step'] == 0:
                 email_rec = st.text_input("Digite seu e-mail cadastrado")
                 if st.button("Enviar Código de Recuperação"):
-                    # Verifica se o email existe
                     u_chk = get_data("SELECT * FROM usuarios WHERE email=?", (email_rec,))
                     if not u_chk.empty:
                         cod = gerar_codigo_recuperacao()
-                        # Insert Híbrido
                         run_query("DELETE FROM codigos_recuperacao WHERE email=?", (email_rec,))
                         run_query("INSERT INTO codigos_recuperacao (email, codigo, criado_em) VALUES (?, ?, ?)", (email_rec, cod, str(datetime.now())))
                         
@@ -356,7 +332,6 @@ if not st.session_state['logged_in']:
                 st.info(f"Código enviado para: {st.session_state['recovery_email']}")
                 codigo_input = st.text_input("Informe o Código de 6 dígitos")
                 if st.button("Validar Código"):
-                    # Verifica código no banco
                     db_cod = get_data("SELECT * FROM codigos_recuperacao WHERE email=?", (st.session_state['recovery_email'],))
                     if not db_cod.empty and db_cod.iloc[0]['codigo'] == codigo_input:
                         st.session_state['recovery_step'] = 2
@@ -379,7 +354,6 @@ if not st.session_state['logged_in']:
                     if nova_senha == conf_senha and nova_senha:
                         h_nova = make_hashes(nova_senha)
                         run_query("UPDATE usuarios SET password=? WHERE email=?", (h_nova, st.session_state['recovery_email']))
-                        # Limpa código usado
                         run_query("DELETE FROM codigos_recuperacao WHERE email=?", (st.session_state['recovery_email'],))
                         
                         st.success("Senha alterada com sucesso! Faça login.")
@@ -418,7 +392,6 @@ else:
     if st.session_state['user_setor'] in ["Administrador", "Financeiro"]: menu_options.append("Financeiro")
     if st.session_state['user_setor'] in ["Administrador", "RH"]: menu_options.append("RH")
     menu_options.append("Relatórios")
-    # NOVO MENU: COMUNICAÇÃO
     if st.session_state['user_setor'] in ["Administrador", "Secretaria", "Financeiro"]: menu_options.append("Comunicação")
     if st.session_state['user_setor'] == "Administrador": menu_options.append("Configurações")
     
@@ -471,11 +444,9 @@ else:
                     
                     if st.form_submit_button("Matricular"):
                         if n:
-                            # CORREÇÃO: Converter numpy int para int nativo e verificar sucesso da query
                             tid = int(ts[ts['nome_turma']==t]['id'].values[0])
-                            # Insert Híbrido Seguro
                             if run_query("INSERT INTO alunos (nome, data_nascimento, cpf, pai_nome, mae_nome, telefone_contato, email_responsavel, turma_id, endereco, saude_alergias, seguranca_autorizados) VALUES (?,?,?,?,?,?,?,?,?,?,?)", 
-                                      (n, str(nas), cpf, pai, mae, tel, email, tid, end, sau, seg)):
+                                         (n, str(nas), cpf, pai, mae, tel, email, tid, end, sau, seg)):
                                 st.success(f"Aluno {n} matriculado!")
                         else:
                             st.warning("Nome é obrigatório.")
@@ -497,11 +468,9 @@ else:
                 sel = st.selectbox("Selecione o Aluno", todos['nome'])
                 d = get_data("SELECT * FROM alunos WHERE nome=?", (sel,)).iloc[0]
                 
-                # Prepara turmas para o selectbox de edição
                 ts = get_data("SELECT * FROM turmas WHERE ativa=1")
                 idx_turma = 0
                 if not ts.empty and d['turma_id']:
-                    # Encontra o indice da turma atual do aluno na lista de turmas
                     turmas_list = ts['nome_turma'].tolist()
                     turma_atual_nome_df = ts[ts['id']==d['turma_id']]
                     if not turma_atual_nome_df.empty:
@@ -509,7 +478,6 @@ else:
                          if nome_t in turmas_list:
                              idx_turma = turmas_list.index(nome_t)
                 
-                # Prepara data para o date_input
                 dt_nasc = date(2010,1,1)
                 try:
                     if d['data_nascimento']:
@@ -541,7 +509,6 @@ else:
                     nseg = st.text_input("Autorizados a Buscar", value=d['seguranca_autorizados'] if d['seguranca_autorizados'] else "")
                     
                     if st.form_submit_button("Salvar Alterações Completas"):
-                        # Recupera ID da turma nova
                         ntid = int(ts[ts['nome_turma']==nt]['id'].values[0]) if not ts.empty else int(d['turma_id'])
                         
                         query_update = """
@@ -593,7 +560,6 @@ else:
                     acao = st.radio("Ação no Sistema:", ["Manter na Turma Atual", "Remover da Turma (Concluinte)", "Arquivar Aluno (Inativo)"])
                     
                     if st.form_submit_button("Processar Encerramento"):
-                        # Salva histórico
                         sucesso_hist = run_query("""
                             INSERT INTO historico_escolar (aluno_id, ano_letivo, dias_letivos, frequencia_aluno, 
                             nota_portugues, nota_matematica, nota_historia, nota_geografia, nota_ciencias, nota_ingles, nota_artes, nota_ed_fisica, nota_religiao, resultado_final)
@@ -601,7 +567,6 @@ else:
                         """, (int(d_h['id']), ano, dias, freq, np, nm, nh, ng, nc, ni, na, ne, nr, res))
                         
                         if sucesso_hist:
-                            # Atualiza status do aluno
                             if "Remover" in acao: 
                                 run_query("UPDATE alunos SET turma_id=NULL WHERE id=?", (int(d_h['id']),))
                             elif "Arquivar" in acao: 
@@ -636,7 +601,6 @@ else:
                     submitted = st.form_submit_button("Lançar Cobrança")
 
                     if submitted:
-                        # Buscar dados mais completos (Nome da mãe/pai para usar de responsável)
                         dados_aluno = get_data("SELECT id, email_responsavel, telefone_contato, mae_nome, pai_nome FROM alunos WHERE nome=?", (sl,)).iloc[0]
                         aid = dados_aluno['id']
                         email_resp = dados_aluno['email_responsavel']
@@ -646,7 +610,6 @@ else:
                         if run_query("INSERT INTO financeiro (aluno_id, descricao, valor, vencimento) VALUES (?,?,?,?)", (int(aid), ds, vl, str(dt_venc))):
                             st.success("Lançamento realizado no sistema.")
                             
-                            # Dicionário de Variáveis Comuns
                             vars_msg = {
                                 "aluno": sl,
                                 "responsavel": nome_resp,
@@ -658,7 +621,6 @@ else:
                             # ENVIO DE EMAIL
                             if mail:
                                 if email_resp:
-                                    # Buscar template
                                     tpl = get_data("SELECT * FROM templates_email WHERE nome_interno='Nova Cobrança'")
                                     if not tpl.empty:
                                         assunto_base = tpl.iloc[0]['assunto']
@@ -667,9 +629,8 @@ else:
                                         corpo_final = processar_template_email(corpo_base, vars_msg)
                                         ok, msg = enviar_email_real(email_resp, assunto_base, corpo_final)
                                     else:
-                                        # Fallback
                                         ok, msg = enviar_email_real(email_resp, f"Escola: {ds}", f"Nova cobrança: {ds}\nValor: R$ {vl}")
-                                        
+                                    
                                     if ok: st.toast("📧 E-mail enviado com sucesso!")
                                     else: st.error(f"Erro no envio de e-mail: {msg}")
                                 else:
@@ -679,7 +640,6 @@ else:
                             if zap:
                                 num_limpo = limpar_telefone(tel_resp)
                                 if num_limpo:
-                                    # Busca template
                                     tpl_zap = get_data("SELECT * FROM templates_whatsapp WHERE nome_interno='Nova Cobrança Zap'")
                                     msg_zap_final = ""
                                     if not tpl_zap.empty:
@@ -688,9 +648,7 @@ else:
                                     else:
                                         msg_zap_final = f"Olá, nova cobrança para {sl}: {ds} - R$ {vl:.2f}"
                                     
-                                    # Cria Link
                                     msg_encoded = urllib.parse.quote(msg_zap_final)
-                                    # Assume Brasil (55) se não tiver
                                     if not num_limpo.startswith("55"): num_limpo = "55" + num_limpo
                                     
                                     link_zap = f"https://wa.me/{num_limpo}?text={msg_encoded}"
@@ -737,7 +695,6 @@ else:
             hoje_str = str(hoje)
             daqui_5_dias = str(hoje + timedelta(days=5))
             
-            # 1. Buscar quem vence em 5 dias
             q_5 = """
                 SELECT f.id, a.nome, a.email_responsavel, a.telefone_contato, a.mae_nome, a.pai_nome, f.descricao, f.valor, f.vencimento 
                 FROM financeiro f JOIN alunos a ON f.aluno_id = a.id 
@@ -745,7 +702,6 @@ else:
             """
             df_5 = get_data(q_5, (daqui_5_dias,))
 
-            # 2. Buscar quem vence HOJE
             q_hj = """
                 SELECT f.id, a.nome, a.email_responsavel, a.telefone_contato, a.mae_nome, a.pai_nome, f.descricao, f.valor, f.vencimento 
                 FROM financeiro f JOIN alunos a ON f.aluno_id = a.id 
@@ -759,13 +715,11 @@ else:
             with col_a:
                 st.warning(f"📅 Vencendo em 5 dias ({len(df_5)} encontrados)")
                 if not df_5.empty:
-                    # Botão Email em Massa
                     if st.button("📧 Enviar TODOS E-mails (5 dias)"):
                         tpl = get_data("SELECT * FROM templates_email WHERE nome_interno='Aviso 5 Dias'")
                         if not tpl.empty:
                             cont_env = 0
                             for _, row in df_5.iterrows():
-                                # Verifica se já enviou hoje
                                 ja_foi = get_data("SELECT id FROM log_envios WHERE financeiro_id=? AND tipo_aviso='5_dias' AND data_envio=?", (row['id'], hoje_str))
                                 if ja_foi.empty and row['email_responsavel']:
                                     resp = row['mae_nome'] or row['pai_nome'] or "Responsável"
@@ -781,7 +735,6 @@ else:
                         else: st.error("Configure o modelo 'Aviso 5 Dias' na aba Modelos.")
 
                     st.markdown("---")
-                    # Lista Individual para WhatsApp
                     for i, row in df_5.iterrows():
                         st.markdown(f"**{row['nome']}** - R$ {row['valor']:.2f}")
                         ja_foi_zap = get_data("SELECT id FROM log_envios WHERE financeiro_id=? AND tipo_aviso='5_dias' AND canal='whatsapp' AND data_envio=?", (row['id'], hoje_str))
@@ -812,7 +765,6 @@ else:
             with col_b:
                 st.error(f"🚨 Vencendo HOJE ({len(df_hj)} encontrados)")
                 if not df_hj.empty:
-                    # Botão Email em Massa
                     if st.button("📧 Enviar TODOS E-mails (HOJE)"):
                         tpl = get_data("SELECT * FROM templates_email WHERE nome_interno='Aviso Hoje'")
                         if not tpl.empty:
@@ -833,7 +785,6 @@ else:
                         else: st.error("Configure o modelo 'Aviso Hoje' na aba Modelos.")
 
                     st.markdown("---")
-                    # Lista Individual para WhatsApp
                     for i, row in df_hj.iterrows():
                         st.markdown(f"**{row['nome']}** - R$ {row['valor']:.2f}")
                         ja_foi_zap = get_data("SELECT id FROM log_envios WHERE financeiro_id=? AND tipo_aviso='hoje' AND canal='whatsapp' AND data_envio=?", (row['id'], hoje_str))
@@ -1048,10 +999,9 @@ else:
             st.markdown("### Configuração SMTP (Gmail/Outlook)")
             st.warning("Para Gmail, use uma 'Senha de App' gerada nas configurações de segurança do Google, não sua senha normal.")
             
-            cfg_mail = get_data("SELECT valor FROM config_sistema WHERE chave='email_envio'")
-            cfg_pass = get_data("SELECT valor FROM config_sistema WHERE chave='senha_app'")
-            val_m = cfg_mail.iloc[0]['valor'] if not cfg_mail.empty else ""
-            val_p = cfg_pass.iloc[0]['valor'] if not cfg_pass.empty else ""
+            # Uso da função cacheada
+            val_m = get_config_sistema('email_envio')
+            val_p = get_config_sistema('senha_app')
 
             with st.form("email_cfg"):
                 em = st.text_input("E-mail da Escola", value=val_m)
@@ -1060,5 +1010,6 @@ else:
                     run_query("DELETE FROM config_sistema WHERE chave IN ('email_envio', 'senha_app')")
                     run_query("INSERT INTO config_sistema (chave, valor) VALUES (?,?)", ('email_envio', em))
                     run_query("INSERT INTO config_sistema (chave, valor) VALUES (?,?)", ('senha_app', pw))
+                    # Limpa o cache de dados para forçar recarga na próxima leitura
+                    st.cache_data.clear()
                     st.success("Configuração salva! Teste enviando uma cobrança.")
-# FINAL DO CODIGO AQUI
