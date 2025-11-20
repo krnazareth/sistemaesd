@@ -396,6 +396,7 @@ def login_page():
             user_data = check_login(username, password)
             if user_data is not None:
                 st.session_state['logged_in'] = True
+                st.session_state['page'] = 'main'
                 st.session_state['user_data'] = user_data
                 st.session_state['menu'] = "Dashboard"
                 st.rerun()
