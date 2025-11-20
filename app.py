@@ -1013,3 +1013,5 @@ else:
                     # Limpa o cache de dados para forçar recarga na próxima leitura
                     st.cache_data.clear()
                     st.success("Configuração salva! Teste enviando uma cobrança.")
+
+# FINAL DO CODIGO AQUI
