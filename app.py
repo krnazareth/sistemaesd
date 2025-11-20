@@ -355,7 +355,7 @@ def check_login(username, password):
     hashed_password = make_hashes(password)
     # st.sidebar.info(f"Hash da Senha: {hashed_password}") # Linha de diagnóstico temporária. Descomente para debug.
     
-    q = 'SELECT * FROM usuarios WHERE username = ? AND "password" = ?'
+    q = 'SELECT * FROM usuarios WHERE username = ? AND password = ?'
     df = get_data(q, (username, hashed_password))
     if not df.empty:
         return df.iloc[0]
