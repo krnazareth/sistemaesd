@@ -1,23 +1,20 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
-import sqlite3
 import pandas as pd
-import os
-import subprocess
-import shutil
 import hashlib
 import smtplib
 import random
 import string
 import urllib.parse
-import psycopg2
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import date, datetime, timedelta
 from fpdf import FPDF
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 # ==============================================================================
-# CONFIGURAÇÃO GERAL (DEVE SER A PRIMEIRA LINHA DE COMANDO STREAMLIT)
+# CONFIGURAÇÃO GERAL
 # ==============================================================================
 APP_TITLE = "Sistema ERP - Educandário Sonho Dourado"
 st.set_page_config(page_title=APP_TITLE, layout="wide", page_icon="🏫")
@@ -25,65 +22,25 @@ st.set_page_config(page_title=APP_TITLE, layout="wide", page_icon="🏫")
 # ==============================================================================
 # ESTILO VISUAL (RM FLUXUS-LIKE)
 # ==============================================================================
-# Cores: Azul (primário), Branco/Cinza Claro (fundo/cartões)
 st.markdown("""
     <style>
-    /* Estilo Geral - Fundo Claro */
-    .stApp {
-        background-color: #f0f2f6; /* Cor de fundo suave */
-    }
-    
-    /* Sidebar - Fundo Azul Escuro (Estilo RM Fluxus) */
-    [data-testid="stSidebar"] {
-        background-color: #004d99; /* Azul escuro */
-        color: white;
-    }
-    
-    /* Títulos na Sidebar */
+    .stApp { background-color: #f0f2f6; }
+    [data-testid="stSidebar"] { background-color: #004d99; color: white; }
     [data-testid="stSidebar"] .stMarkdown h1, 
     [data-testid="stSidebar"] .stMarkdown h2,
-    [data-testid="stSidebar"] .stMarkdown h3 {
-        color: white;
-    }
-    
-    /* Botões na Sidebar */
+    [data-testid="stSidebar"] .stMarkdown h3 { color: white; }
     [data-testid="stSidebar"] .stButton>button {
-        background-color: #007bff; /* Azul primário */
-        color: white;
-        border: none;
-        border-radius: 5px;
-        padding: 10px;
-        margin-top: 5px;
-        width: 100%;
+        background-color: #007bff; color: white; border: none;
+        border-radius: 5px; padding: 10px; margin-top: 5px; width: 100%;
     }
-    
-    /* Botões na Sidebar (Hover) */
-    [data-testid="stSidebar"] .stButton>button:hover {
-        background-color: #0056b3;
-    }
-    
-    /* Botões no Corpo Principal */
-    .stButton>button {
-        width: 100%;
-        border-radius: 5px;
-    }
-    
-    /* Cartões de Métrica (metric-card) */
+    [data-testid="stSidebar"] .stButton>button:hover { background-color: #0056b3; }
+    .stButton>button { width: 100%; border-radius: 5px; }
     .metric-card {
-        background-color: white; 
-        border-left: 5px solid #007bff; /* Borda azul para destaque */
-        border-radius: 8px; 
-        padding: 15px; 
-        text-align: center;
+        background-color: white; border-left: 5px solid #007bff;
+        border-radius: 8px; padding: 15px; text-align: center;
         box-shadow: 0 4px 8px rgba(0,0,0,0.1);
     }
-    
-    /* Títulos e Subtítulos */
-    h1, h2, h3, h4 {
-        color: #004d99; /* Azul escuro para títulos */
-    }
-    
-    /* Outros estilos originais */
+    h1, h2, h3, h4 { color: #004d99; }
     .forgot-pass {text-align: center; font-size: 0.8em; color: #555; cursor: pointer;}
     .status-ok {color: green; font-weight: bold;}
     .status-warn {color: orange; font-weight: bold;}
@@ -91,169 +48,138 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ==============================================================================
-# CAMADA DE DADOS (HÍBRIDA: SQLITE + POSTGRESQL) - SEM ALTERAÇÃO DE LÓGICA
+# CAMADA DE DADOS (POSTGRESQL OTIMIZADO)
 # ==============================================================================
-DB_CONFIG = st.secrets.get("database")
-IS_POSTGRES = DB_CONFIG is not None
 
-# Substitua a função run_query antiga por esta lógica usando st.connection
-# Isso exige que você tenha configurado o .streamlit/secrets.toml corretamente
-
-def run_query(query, params=()):
-    # Se for SQLite, mantém como estava
-    if not IS_POSTGRES:
-        conn = sqlite3.connect('escola.db', timeout=10)
-        c = conn.cursor()
-        try:
-            c.execute(query, params)
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro: {e}")
-            return False
-        finally:
-            conn.close()
-    
-    # Se for Postgres, usa a conexão inteligente do Streamlit
-    else:
-        try:
-            # st.connection gerencia o cache e não fecha a conexão a toda hora
-            conn = st.connection("postgresql", type="sql")
-            with conn.session as s:
-                s.execute(text(query), params) # Precisa importar 'text' do sqlalchemy
-                s.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro PG: {e}")
-            return False
+# Cache da conexão para evitar lentidão (Otimização Crítica)
+@st.cache_resource
+def init_connection():
+    """Inicializa a conexão persistente com o PostgreSQL."""
+    try:
+        db_config = st.secrets["database"]
+        return psycopg2.connect(
+            host=db_config["host"],
+            database=db_config["dbname"],
+            user=db_config["user"],
+            password=db_config["password"],
+            port=db_config["port"]
+        )
+    except Exception as e:
+        st.error(f"❌ Erro fatal de conexão com o banco: {e}")
+        return None
 
 def fix_query(query):
-    """Adapta a query do padrão SQLite (?) para PostgreSQL (%s) se necessário."""
-    if IS_POSTGRES:
-        return query.replace('?', '%s')
-    return query
+    """Adapta query do padrão SQLite (?) para PostgreSQL (%s)."""
+    return query.replace('?', '%s')
 
 def run_query(query, params=()):
-    conn = run_query()
+    """Executa comandos de escrita (INSERT, UPDATE, DELETE)."""
+    conn = init_connection()
     if not conn: return False
     
-    c = conn.cursor()
     final_query = fix_query(query)
     
     try:
-        # Início da transação (commit/rollback implícito no try/except)
-        if not IS_POSTGRES:
-             c.execute("PRAGMA foreign_keys = ON;")
-        
-        c.execute(final_query, params)
-        conn.commit()
-        return True
+        with conn.cursor() as c:
+            c.execute(final_query, params)
+            conn.commit()
+            return True
     except Exception as e:
+        conn.rollback()
         st.error(f"❌ Erro no Banco de Dados: {e}")
-        conn.rollback() # Adicionado rollback para melhor integridade
         return False
-    finally:
-        conn.close()
 
 def get_data(query, params=()):
-    conn = run_query()
+    """Executa comandos de leitura (SELECT)."""
+    conn = init_connection()
     if not conn: return pd.DataFrame()
     
     final_query = fix_query(query)
     
     try:
-        df = pd.read_sql_query(final_query, conn, params=params)
-        return df
+        return pd.read_sql(final_query, conn, params=params)
     except Exception as e:
+        conn.rollback()
         st.error(f"Erro ao ler dados: {e}")
         return pd.DataFrame()
-    finally:
-        conn.close()
 
-# --- CACHE PARA CONFIGURAÇÕES (OTIMIZAÇÃO) ---
-@st.cache_data(ttl=300) # Cache por 5 minutos
+# --- CACHE PARA CONFIGURAÇÕES ---
+@st.cache_data(ttl=300)
 def get_config_sistema(chave):
-    """Busca configurações com cache para evitar hits excessivos no banco."""
     df = get_data("SELECT valor FROM config_sistema WHERE chave=?", (chave,))
     if not df.empty:
         return df.iloc[0]['valor']
     return ""
 
-# --- MIGRAÇÃO E INICIALIZAÇÃO DE TABELAS (OTIMIZAÇÃO CRÍTICA) ---
+# --- INICIALIZAÇÃO DE TABELAS ---
 @st.cache_resource
 def verificar_e_atualizar_tabelas():
-    """Esta função agora roda apenas UMA vez ao iniciar o servidor, tornando o sistema muito mais rápido."""
-    conn = run_query()
+    conn = init_connection()
     if not conn: return
-    c = conn.cursor()
     
-    pk_type = "SERIAL PRIMARY KEY" if IS_POSTGRES else "INTEGER PRIMARY KEY AUTOINCREMENT"
-    
+    # Tabelas adaptadas para PostgreSQL (SERIAL em vez de AUTOINCREMENT)
     tabelas = [
-        f'''CREATE TABLE IF NOT EXISTS professores (id {pk_type}, nome TEXT, telefone TEXT, cargo TEXT DEFAULT 'Professor', cpf TEXT, rg TEXT, data_admissao TEXT, salario_base REAL, carga_horaria TEXT, endereco TEXT, status_rh TEXT DEFAULT 'Ativo')''',
-        f'''CREATE TABLE IF NOT EXISTS turmas (id {pk_type}, nome_turma TEXT UNIQUE, professor_id INTEGER, ativa INTEGER DEFAULT 1, FOREIGN KEY(professor_id) REFERENCES professores(id))''',
-        f'''CREATE TABLE IF NOT EXISTS alunos (id {pk_type}, nome TEXT, data_nascimento TEXT, naturalidade TEXT, cpf TEXT, rg TEXT, pai_nome TEXT, mae_nome TEXT, turma_id INTEGER, status TEXT DEFAULT 'Cursando', endereco TEXT, bairro TEXT, cep TEXT, cidade TEXT, telefone_contato TEXT, email_responsavel TEXT, saude_alergias TEXT, saude_problemas TEXT, saude_plano TEXT, seguranca_autorizados TEXT, seguranca_transporte TEXT, FOREIGN KEY(turma_id) REFERENCES turmas(id))''',
-        f'''CREATE TABLE IF NOT EXISTS config_sistema (chave TEXT PRIMARY KEY, valor TEXT)''',
-        f'''CREATE TABLE IF NOT EXISTS historico_escolar (id {pk_type}, aluno_id INTEGER, ano_letivo INTEGER, turma_nome TEXT, dias_letivos INTEGER, frequencia_aluno INTEGER, nota_portugues REAL, nota_matematica REAL, nota_historia REAL, nota_geografia REAL, nota_ciencias REAL, nota_ingles REAL, nota_artes REAL, nota_ed_fisica REAL, nota_religiao REAL, resultado_final TEXT, obs TEXT, FOREIGN KEY(aluno_id) REFERENCES alunos(id))''',
-        f'''CREATE TABLE IF NOT EXISTS financeiro (id {pk_type}, aluno_id INTEGER, descricao TEXT, valor REAL, vencimento TEXT, status TEXT DEFAULT 'Pendente', FOREIGN KEY(aluno_id) REFERENCES alunos(id))''',
-        f'''CREATE TABLE IF NOT EXISTS modelos_relatorios (id {pk_type}, titulo TEXT, conteudo_tex TEXT)''',
-        f'''CREATE TABLE IF NOT EXISTS usuarios (id {pk_type}, username TEXT UNIQUE, "password" TEXT, setor TEXT, email TEXT)''',
-        f'''CREATE TABLE IF NOT EXISTS codigos_recuperacao (email TEXT PRIMARY KEY, codigo TEXT, criado_em TEXT)''',
-        f'''CREATE TABLE IF NOT EXISTS templates_email (id {pk_type}, nome_interno TEXT UNIQUE, assunto TEXT, corpo TEXT)''',
-        f'''CREATE TABLE IF NOT EXISTS templates_whatsapp (id {pk_type}, nome_interno TEXT UNIQUE, mensagem TEXT)''',
-        f'''CREATE TABLE IF NOT EXISTS log_envios (id {pk_type}, financeiro_id INTEGER, tipo_aviso TEXT, data_envio TEXT, canal TEXT, FOREIGN KEY(financeiro_id) REFERENCES financeiro(id))'''
+        '''CREATE TABLE IF NOT EXISTS professores (id SERIAL PRIMARY KEY, nome TEXT, telefone TEXT, cargo TEXT DEFAULT 'Professor', cpf TEXT, rg TEXT, data_admissao TEXT, salario_base REAL, carga_horaria TEXT, endereco TEXT, status_rh TEXT DEFAULT 'Ativo')''',
+        '''CREATE TABLE IF NOT EXISTS turmas (id SERIAL PRIMARY KEY, nome_turma TEXT UNIQUE, professor_id INTEGER, ativa INTEGER DEFAULT 1, FOREIGN KEY(professor_id) REFERENCES professores(id))''',
+        '''CREATE TABLE IF NOT EXISTS alunos (id SERIAL PRIMARY KEY, nome TEXT, data_nascimento TEXT, naturalidade TEXT, cpf TEXT, rg TEXT, pai_nome TEXT, mae_nome TEXT, turma_id INTEGER, status TEXT DEFAULT 'Cursando', endereco TEXT, bairro TEXT, cep TEXT, cidade TEXT, telefone_contato TEXT, email_responsavel TEXT, saude_alergias TEXT, saude_problemas TEXT, saude_plano TEXT, seguranca_autorizados TEXT, seguranca_transporte TEXT, FOREIGN KEY(turma_id) REFERENCES turmas(id))''',
+        '''CREATE TABLE IF NOT EXISTS config_sistema (chave TEXT PRIMARY KEY, valor TEXT)''',
+        '''CREATE TABLE IF NOT EXISTS historico_escolar (id SERIAL PRIMARY KEY, aluno_id INTEGER, ano_letivo INTEGER, turma_nome TEXT, dias_letivos INTEGER, frequencia_aluno INTEGER, nota_portugues REAL, nota_matematica REAL, nota_historia REAL, nota_geografia REAL, nota_ciencias REAL, nota_ingles REAL, nota_artes REAL, nota_ed_fisica REAL, nota_religiao REAL, resultado_final TEXT, obs TEXT, FOREIGN KEY(aluno_id) REFERENCES alunos(id))''',
+        '''CREATE TABLE IF NOT EXISTS financeiro (id SERIAL PRIMARY KEY, aluno_id INTEGER, descricao TEXT, valor REAL, vencimento TEXT, status TEXT DEFAULT 'Pendente', FOREIGN KEY(aluno_id) REFERENCES alunos(id))''',
+        '''CREATE TABLE IF NOT EXISTS modelos_relatorios (id SERIAL PRIMARY KEY, titulo TEXT, conteudo_tex TEXT)''',
+        '''CREATE TABLE IF NOT EXISTS usuarios (id SERIAL PRIMARY KEY, username TEXT UNIQUE, password TEXT, setor TEXT, email TEXT)''',
+        '''CREATE TABLE IF NOT EXISTS codigos_recuperacao (email TEXT PRIMARY KEY, codigo TEXT, criado_em TEXT)''',
+        '''CREATE TABLE IF NOT EXISTS templates_email (id SERIAL PRIMARY KEY, nome_interno TEXT UNIQUE, assunto TEXT, corpo TEXT)''',
+        '''CREATE TABLE IF NOT EXISTS templates_whatsapp (id SERIAL PRIMARY KEY, nome_interno TEXT UNIQUE, mensagem TEXT)''',
+        '''CREATE TABLE IF NOT EXISTS log_envios (id SERIAL PRIMARY KEY, financeiro_id INTEGER, tipo_aviso TEXT, data_envio TEXT, canal TEXT, FOREIGN KEY(financeiro_id) REFERENCES financeiro(id))'''
     ]
     
-    for create_cmd in tabelas:
-        try:
-            c.execute(create_cmd)
-        except Exception as e:
-            pass # Ignora erros de tabela já existente ou outros
-
     try:
-        q_check_admin = "SELECT * FROM usuarios"
-        c.execute(q_check_admin)
-        if not c.fetchall():
-            # Mantido hashlib.sha256 devido à restrição de instalação
-            from hashlib import sha256
-            q_insert = fix_query("INSERT INTO usuarios (username, password, setor, email) VALUES (?, ?, ?, ?)")
-            c.execute(q_insert, ("admin", sha256(str.encode("1234")).hexdigest(), "Administrador", "admin@escola.com"))
-            conn.commit()
-    except Exception as e:
-        conn.commit()
-
-    def insert_ignore(table, col_check, val_check, cols_insert, vals_insert):
-        q_check = fix_query(f"SELECT id FROM {table} WHERE {col_check} = ?")
-        c.execute(q_check, (val_check,))
-        if not c.fetchall():
-            placeholders = ",".join(["?" for _ in vals_insert])
-            q_ins = fix_query(f"INSERT INTO {table} ({cols_insert}) VALUES ({placeholders})")
-            c.execute(q_ins, vals_insert)
+        with conn.cursor() as c:
+            for cmd in tabelas:
+                c.execute(cmd)
             conn.commit()
 
-    # Inserção de templates padrão (mantido o original)
-    insert_ignore("templates_email", "nome_interno", "Nova Cobrança", "nome_interno, assunto, corpo", 
+            # Cria admin padrão
+            c.execute("SELECT * FROM usuarios")
+            if not c.fetchall():
+                from hashlib import sha256
+                # PostgreSQL usa %s
+                c.execute("INSERT INTO usuarios (username, password, setor, email) VALUES (%s, %s, %s, %s)", 
+                          ("admin", sha256(str.encode("1234")).hexdigest(), "Administrador", "admin@escola.com"))
+                conn.commit()
+
+            # Templates padrão (simulando insert ignore com check prévio)
+            def insert_default(table, col_check, val_check, cols, vals):
+                c.execute(f"SELECT id FROM {table} WHERE {col_check} = %s", (val_check,))
+                if not c.fetchall():
+                    placeholders = ",".join(["%s" for _ in vals])
+                    c.execute(f"INSERT INTO {table} ({cols}) VALUES ({placeholders})", vals)
+
+            insert_default("templates_email", "nome_interno", "Nova Cobrança", "nome_interno, assunto, corpo", 
                   ("Nova Cobrança", "Aviso Financeiro - Educandário Sonho Dourado", "Olá {responsavel},\n\nInformamos que uma nova cobrança foi gerada para o aluno(a) {aluno}.\n\nDescrição: {descricao}\nValor: R$ {valor}\nVencimento: {vencimento}\n\nAtenciosamente,\nSecretaria."))
-    insert_ignore("templates_whatsapp", "nome_interno", "Nova Cobrança Zap", "nome_interno, mensagem",
+            insert_default("templates_whatsapp", "nome_interno", "Nova Cobrança Zap", "nome_interno, mensagem",
                   ("Nova Cobrança Zap", "Olá {responsavel}! 👋\nNova cobrança gerada para *{aluno}*.\n\n📝 *Ref:* {descricao}\n💰 *Valor:* R$ {valor}\n📅 *Vencimento:* {vencimento}"))
-
-    insert_ignore("templates_email", "nome_interno", "Aviso 5 Dias", "nome_interno, assunto, corpo",
+            
+            insert_default("templates_email", "nome_interno", "Aviso 5 Dias", "nome_interno, assunto, corpo",
                   ("Aviso 5 Dias", "Lembrete de Vencimento Próximo", "Olá {responsavel},\n\nLembramos que a fatura de {aluno} vencerá em 5 dias ({vencimento}).\n\nDescrição: {descricao}\nValor: R$ {valor}\n\nEvite juros pagando em dia."))
-    insert_ignore("templates_whatsapp", "nome_interno", "Aviso 5 Dias Zap", "nome_interno, mensagem",
+            insert_default("templates_whatsapp", "nome_interno", "Aviso 5 Dias Zap", "nome_interno, mensagem",
                   ("Aviso 5 Dias Zap", "Olá {responsavel}! 👋\nPassando para lembrar que a mensalidade de *{aluno}* vence em 5 dias ({vencimento}).\n\nValor: R$ {valor}\nDescrição: {descricao}"))
 
-    insert_ignore("templates_email", "nome_interno", "Aviso Hoje", "nome_interno, assunto, corpo",
+            insert_default("templates_email", "nome_interno", "Aviso Hoje", "nome_interno, assunto, corpo",
                   ("Aviso Hoje", "Fatura Vence Hoje!", "Olá {responsavel},\n\nA fatura referente a {descricao} vence HOJE ({vencimento}).\nAluno: {aluno}\nValor: R$ {valor}\n\nCaso já tenha pago, desconsidere."))
-    insert_ignore("templates_whatsapp", "nome_interno", "Aviso Hoje Zap", "nome_interno, mensagem",
+            insert_default("templates_whatsapp", "nome_interno", "Aviso Hoje Zap", "nome_interno, mensagem",
                   ("Aviso Hoje Zap", "🚨 Olá {responsavel}!\n\nHojé é o dia do vencimento da fatura de *{aluno}*.\n\n📅 *Vencimento:* HOJE\n💰 *Valor:* R$ {valor}\n📝 *Ref:* {descricao}\n\nEstamos à disposição!"))
 
-    conn.close()
+            conn.commit()
+    except Exception as e:
+        conn.rollback()
+        # Ignora erro se tabela já existe, mas loga no console
+        print(f"Log de Inicialização: {e}")
 
-# Executa a inicialização (com cache)
 verificar_e_atualizar_tabelas()
 
 # ==============================================================================
-# SEGURANÇA E UTILITÁRIOS - SEM ALTERAÇÃO DE LÓGICA
+# SEGURANÇA E UTILITÁRIOS
 # ==============================================================================
 def make_hashes(p): return hashlib.sha256(str.encode(p)).hexdigest()
 
@@ -299,7 +225,7 @@ def enviar_email_real(destinatario, assunto, corpo):
         return False, str(e)
 
 # ==============================================================================
-# GERAÇÃO DE PDF (HISTÓRICO ESCOLAR) - SEM ALTERAÇÃO DE LÓGICA
+# GERAÇÃO DE PDF (HISTÓRICO ESCOLAR)
 # ==============================================================================
 def gerar_historico_pdf(dados_aluno, dados_historico):
     pdf = FPDF('P', 'mm', 'A4')
@@ -363,26 +289,18 @@ def gerar_historico_pdf(dados_aluno, dados_historico):
     return pdf_file
 
 # ==============================================================================
-# FUNÇÕES DE AUTENTICAÇÃO - SEM ALTERAÇÃO DE LÓGICA
+# FUNÇÕES DE AUTENTICAÇÃO
 # ==============================================================================
 def check_login(username, password):
     hashed_password = make_hashes(password)
-    # Removido log de hash
-    # st.sidebar.info(f"Hash da Senha: {hashed_password}") # Linha de diagnóstico temporária. Descomente para debug.
-    
     q = 'SELECT * FROM usuarios WHERE username = ? AND password = ?'
-    
-    # Revertendo para a forma original que usa get_data
     df = get_data(q, (username, hashed_password))
-    
     if not df.empty:
         return df.iloc[0]
     return None
 
 def create_user(username, password, setor, email):
     hashed_password = make_hashes(password)
-    # Removido log de hash
-    # st.sidebar.info(f"Hash da Senha: {hashed_password}") # Linha de diagnóstico temporária. Descomente para debug.
     q = "INSERT INTO usuarios (username, password, setor, email) VALUES (?, ?, ?, ?)"
     return run_query(q, (username, hashed_password, setor, email))
 
@@ -410,7 +328,7 @@ def login_page():
             user_data = check_login(username, password)
             if user_data is not None:
                 st.session_state['logged_in'] = True
-                st.session_state['page'] = 'main'
+                st.session_state['page'] = 'main' # CORREÇÃO: Garante que sai da tela de login
                 st.session_state['user_data'] = user_data
                 st.session_state['menu'] = "Dashboard"
                 st.rerun()
@@ -432,7 +350,6 @@ def forgot_password_page():
     if 'code_sent' not in st.session_state:
         st.session_state['code_sent'] = False
         st.session_state['recovery_email'] = None
-        st.session_state['recovery_code'] = None
         
     if st.session_state['code_sent']:
         code = st.text_input("Código de Recuperação")
@@ -450,8 +367,14 @@ def forgot_password_page():
             elif new_password != confirm_password:
                 st.error("As senhas não coincidem.")
             else:
-                # Verifica validade do código (ex: 1 hora)
-                criado_em = datetime.strptime(df.iloc[0]['criado_em'], '%Y-%m-%d %H:%M:%S.%f')
+                # Verifica validade do código (1 hora)
+                # Adaptação para timestamp string do SQLite/Postgres
+                try:
+                    criado_em = datetime.strptime(df.iloc[0]['criado_em'], '%Y-%m-%d %H:%M:%S.%f')
+                except:
+                     # Fallback caso o formato venha diferente do banco
+                     criado_em = datetime.strptime(df.iloc[0]['criado_em'][:19], '%Y-%m-%d %H:%M:%S')
+
                 if datetime.now() - criado_em > timedelta(hours=1):
                     st.error("Código expirado. Solicite um novo.")
                 elif reset_password(st.session_state['recovery_email'], new_password):
@@ -472,7 +395,7 @@ def forgot_password_page():
             else:
                 codigo = gerar_codigo_recuperacao()
                 
-                # Salva o código no banco
+                # Salva o código no banco (Delete antes para garantir limpo)
                 run_query("DELETE FROM codigos_recuperacao WHERE email = ?", (email,))
                 run_query("INSERT INTO codigos_recuperacao (email, codigo, criado_em) VALUES (?, ?, ?)", (email, codigo, str(datetime.now())))
                 
@@ -502,7 +425,7 @@ def main_app():
     
     # --- SIDEBAR (Menu) ---
     with st.sidebar:
-        st.image("logoesd.png", width=80) # Logo ajustado
+        st.image("logoesd.png", width=80) 
         st.markdown(f"<h3 style='text-align: center; color: white;'>{APP_TITLE}</h3>", unsafe_allow_html=True)
         st.markdown(f"**Usuário:** {user_data['username']}")
         st.markdown(f"**Setor:** {user_data['setor']}")
@@ -524,32 +447,33 @@ def main_app():
     if menu == "Dashboard":
         st.title("📊 Dashboard")
         
-        # Exemplo de Métricas
-        df_alunos = get_data("SELECT COUNT(id) as total FROM alunos WHERE status='Cursando'")
-        df_turmas = get_data("SELECT COUNT(id) as total FROM turmas WHERE ativa=1")
-        df_pendencias = get_data("SELECT SUM(valor) as total FROM financeiro WHERE status='Pendente'")
-        
-        c1, c2, c3 = st.columns(3)
-        
-        with c1:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.metric("Alunos Ativos", df_alunos.iloc[0]['total'] if not df_alunos.empty else 0)
-            st.markdown('</div>', unsafe_allow_html=True)
+        # Métricas
+        try:
+            df_alunos = get_data("SELECT COUNT(id) as total FROM alunos WHERE status='Cursando'")
+            df_turmas = get_data("SELECT COUNT(id) as total FROM turmas WHERE ativa=1")
+            df_pendencias = get_data("SELECT SUM(valor) as total FROM financeiro WHERE status='Pendente'")
             
-        with c2:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.metric("Turmas Ativas", df_turmas.iloc[0]['total'] if not df_turmas.empty else 0)
-            st.markdown('</div>', unsafe_allow_html=True)
+            c1, c2, c3 = st.columns(3)
             
-        with c3:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            df_total = df_pendencias.iloc[0]['total'] if not df_pendencias.empty and df_pendencias.iloc[0]['total'] else 0.0
-            st.metric("Pendências Financeiras", f"R$ {df_total:.2f}")
-            st.markdown('</div>', unsafe_allow_html=True)
+            with c1:
+                st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                st.metric("Alunos Ativos", df_alunos.iloc[0]['total'] if not df_alunos.empty else 0)
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+            with c2:
+                st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                st.metric("Turmas Ativas", df_turmas.iloc[0]['total'] if not df_turmas.empty else 0)
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+            with c3:
+                st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                df_total = df_pendencias.iloc[0]['total'] if not df_pendencias.empty and df_pendencias.iloc[0]['total'] else 0.0
+                st.metric("Pendências Financeiras", f"R$ {df_total:.2f}")
+                st.markdown('</div>', unsafe_allow_html=True)
+        except:
+            st.warning("Carregando dados do dashboard...")
             
         st.markdown("---")
-        st.subheader("Atividades Recentes")
-        # Adicionar aqui um dataframe de atividades recentes (ex: últimos 5 lançamentos financeiros)
         
     # --- PROFESSORES ---
     elif menu == "Professores":
@@ -763,7 +687,7 @@ def main_app():
 
         with aba2:
             search_aluno = st.text_input("🔍 Buscar Aluno para Edição (Nome ou CPF)")
-            q = "SELECT id, nome, cpf, status FROM alunos"
+            q = "SELECT id, nome, cpf, status, turma_id, data_nascimento, mae_nome, pai_nome, endereco, telefone_contato, email_responsavel, saude_alergias, seguranca_autorizados FROM alunos"
             p = ()
             if search_aluno:
                 q += " WHERE nome LIKE ? OR cpf LIKE ?"
@@ -772,12 +696,12 @@ def main_app():
             df = get_data(q, p)
             
             if not df.empty:
-                st.dataframe(df, use_container_width=True)
+                st.dataframe(df[['id', 'nome', 'cpf', 'status']], use_container_width=True)
                 
                 edit_id = st.number_input("ID do Aluno para Editar", min_value=0, step=1, key="edit_aluno_id")
                 
                 if edit_id > 0 and edit_id in df['id'].values:
-                    d = get_data("SELECT * FROM alunos WHERE id=?", (edit_id,)).iloc[0]
+                    d = df[df['id'] == edit_id].iloc[0]
                     
                     with st.form("edit_aluno"):
                         st.subheader(f"Editando: {d['nome']}")
@@ -793,7 +717,13 @@ def main_app():
                         nt = c2.selectbox("Turma", [""] + t_nomes, index=(t_nomes.index(turma_atual) + 1) if turma_atual in t_nomes else 0)
                         
                         c3, c4, c5 = st.columns(3)
-                        nnas = c3.date_input("Data de Nascimento", value=datetime.strptime(d['data_nascimento'], '%Y-%m-%d').date())
+                        
+                        try:
+                             d_nasc = datetime.strptime(d['data_nascimento'], '%Y-%m-%d').date()
+                        except:
+                             d_nasc = date.today()
+                        
+                        nnas = c3.date_input("Data de Nascimento", value=d_nasc)
                         ncpf = c4.text_input("CPF", value=d['cpf'] if d['cpf'] else "")
                         nmae = c5.text_input("Nome da Mãe", value=d['mae_nome'] if d['mae_nome'] else "")
                         
@@ -1211,11 +1141,10 @@ def main_app():
             senha_app = st.text_input("Senha de App (Gmail)", value=senha_atual, type="password")
             
             if st.form_submit_button("Salvar Configurações de E-mail"):
-                # Salva ou atualiza as configurações
-                run_query("INSERT OR REPLACE INTO config_sistema (chave, valor) VALUES (?, ?)", ('email_envio', email_envio))
-                run_query("INSERT OR REPLACE INTO config_sistema (chave, valor) VALUES (?, ?)", ('senha_app', senha_app))
+                # PostgreSQL Upsert
+                run_query("INSERT INTO config_sistema (chave, valor) VALUES ('email_envio', ?) ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor", (email_envio,))
+                run_query("INSERT INTO config_sistema (chave, valor) VALUES ('senha_app', ?) ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor", (senha_app,))
                 
-                # Invalida o cache para recarregar
                 get_config_sistema.clear()
                 
                 st.success("Configurações de e-mail salvas com sucesso!")
@@ -1268,11 +1197,9 @@ if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
     st.session_state['page'] = 'login'
 
-if st.session_state['page'] == 'login':
-    login_page()
+if st.session_state['logged_in']:
+    main_app()
 elif st.session_state['page'] == 'forgot_password':
     forgot_password_page()
-elif st.session_state['logged_in']:
-    main_app()
 else:
-    login_page() # Fallback
+    login_page()
